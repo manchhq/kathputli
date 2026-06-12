@@ -1,0 +1,10 @@
+[workspace]
+resolver = "3"
+members = ["kathputli"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+tokio = "1.35"
+tokio-util = "0.7"
+tracing = "0.1"

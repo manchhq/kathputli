@@ -1,0 +1,7 @@
+# cargo-release config: bump + commit + tag + push locally; the tag push
+# triggers .github/workflows/release.yml, which publishes to crates.io.
+allow-branch = ["main"]
+publish = false
+push = true
+tag-name = "v{{version}}"
+pre-release-commit-message = "chore: release v{{version}}"

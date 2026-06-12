@@ -1,0 +1,27 @@
+[package]
+name = "kathputli"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal typed-mailbox actor framework over Tokio — actors respond to messages like puppets to strings"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/manchhq/kathputli"
+readme = "README.md"
+rust-version = "1.85"
+keywords = ["actor", "tokio", "mailbox", "concurrency", "async"]
+categories = ["asynchronous", "concurrency"]
+
+[dependencies]
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true, optional = true }
+
+[features]
+# Emit a `trace`-level span around every message handled. Off by default so
+# actors stay zero-overhead unless a consumer opts in.
+tracing = ["dep:tracing"]
+
+[dev-dependencies]
+proptest = "1"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
