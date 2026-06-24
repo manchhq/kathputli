@@ -11,7 +11,6 @@ pub struct ActorId(u64);
 
 impl ActorId {
     /// Allocate the next unique id.
-    #[allow(dead_code)]
     pub(crate) fn next() -> Self {
         ActorId(NEXT_ID.fetch_add(1, Ordering::Relaxed))
     }

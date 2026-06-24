@@ -325,6 +325,27 @@ async fn spawn_once_panics_then_restarts_then_escalates() {
 }
 
 #[tokio::test]
+async fn status_log_survives_event_burst() {
+    use kathputli::ActorSystem;
+    let sys = ActorSystem::start();
+    // Spawn many short-lived actors quickly to flood the lifecycle event stream.
+    for i in 0..50 {
+        let a = sys.spawn(format!("burst-{i}"), |_c| 0u8, |s, _m: (), _c| async move { s });
+        a.shutdown();
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    // After a burst, the forwarder must still be alive and logging: a fresh
+    // actor's Spawned event must still reach the log.
+    let _probe = sys.spawn("after-burst", |_c| 0u8, |s, _m: (), _c| async move { s });
+    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    let log = sys.status().recent_events().await;
+    assert!(
+        log.iter().any(|e| e.contains("after-burst")),
+        "forwarder died during burst: post-burst event missing from log"
+    );
+}
+
+#[tokio::test]
 async fn mailbox_preserved_across_restart() {
     let sys = ActorSystem::start();
 

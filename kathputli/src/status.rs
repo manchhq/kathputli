@@ -147,13 +147,17 @@ pub(crate) fn spawn_status_actor(system: &ActorSystem, root: ActorId) -> StatusR
     let status = StatusRef::new(actor);
 
     // Forwarder: stream lifecycle events into the status actor's log.
+    // Use async send (backpressure) instead of try_send so a full mailbox does not
+    // kill the forwarder.  Only a closed channel means the status actor is gone.
     let mut rx = system.events();
     let sink = status.raw().handle().clone();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(ev) => {
-                    if sink.tell(StatusMsg::Event(ev)).is_err() {
+                    // Backpressure: await delivery instead of dropping on full mailbox.
+                    // Only a closed channel (status actor gone) returns Err here.
+                    if sink.sender.send(StatusMsg::Event(ev)).await.is_err() {
                         break; // status actor gone
                     }
                 }

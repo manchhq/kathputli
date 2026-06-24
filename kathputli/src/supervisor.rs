@@ -271,6 +271,8 @@ impl ActorSystem {
                 match incarnation.catch_unwind().await {
                     Ok(()) => break, // clean exit
                     Err(panic) => {
+                        // A panic skipped record_finish; clear the stale busy flag.
+                        stats.record_finish();
                         let n = restarts.fetch_add(1, Ordering::Relaxed) + 1;
                         if n > max {
                             let ancestry = system.ancestry(id);
@@ -287,6 +289,8 @@ impl ActorSystem {
                 }
             }
             // Cleanup: cancel (cascade children), deregister (no zombie), notify.
+            // Ensure busy flag is clear so a dead actor is never read as busy.
+            stats.record_finish();
             loop_token.cancel();
             system.deregister(id);
             system.emit(SupervisionEvent::Stopped { id });
@@ -388,6 +392,8 @@ impl ActorSystem {
                 match run.catch_unwind().await {
                     Ok(()) => break,
                     Err(panic) => {
+                        // A panic skipped record_finish; clear the stale busy flag.
+                        stats.record_finish();
                         let n = restarts.fetch_add(1, Ordering::Relaxed) + 1;
                         if n > max {
                             let ancestry = system.ancestry(id);
@@ -402,6 +408,8 @@ impl ActorSystem {
                     }
                 }
             }
+            // Ensure busy flag is clear so a dead actor is never read as busy.
+            stats.record_finish();
             loop_token.cancel();
             system.deregister(id);
             system.emit(SupervisionEvent::Stopped { id });
