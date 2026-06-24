@@ -6,10 +6,16 @@ check:
     cargo fmt --check
     cargo clippy --all-targets --all-features -- -D warnings
 
-# run the test suite (default features + all features)
+# run the test suite with nextest (default + all features) plus doctests
+# (nextest does not run doctests, so run them separately)
 test:
-    cargo test
-    cargo test --all-features
+    cargo nextest run
+    cargo nextest run --all-features
+    cargo test --doc --all-features
+
+# build API docs the way docs.rs will (all features)
+doc:
+    cargo doc --all-features --no-deps --open
 
 # everything CI runs
 ci: check test

@@ -10,6 +10,13 @@ rust-version = "1.85"
 keywords = ["actor", "tokio", "mailbox", "concurrency", "async"]
 categories = ["asynchronous", "concurrency"]
 
+# docs.rs builds with default features only; the actor system is behind the
+# off-by-default `system` feature, so enable all features (and the `docsrs` cfg
+# for feature badges) when building the hosted docs.
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 tokio-util = { workspace = true }

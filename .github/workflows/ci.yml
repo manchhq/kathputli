@@ -18,11 +18,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
       - name: Format
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test (default features)
-        run: cargo test
+        run: cargo nextest run
       - name: Test (all features)
-        run: cargo test --all-features
+        run: cargo nextest run --all-features
+      - name: Doctests
+        run: cargo test --doc --all-features
