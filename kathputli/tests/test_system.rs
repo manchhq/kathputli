@@ -289,6 +289,42 @@ async fn one_for_one_isolation() {
 }
 
 #[tokio::test]
+async fn spawn_once_panics_then_restarts_then_escalates() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let sys = ActorSystem::new();
+    let mut events = sys.events();
+
+    // A kamikaze actor that panics every time — should exhaust max_restarts (3),
+    // then emit Failed and die.
+    let run_count = Arc::new(AtomicU32::new(0));
+    let rc = run_count.clone();
+    let a = sys.spawn_once("panicky-once", move |_ctx| {
+        let rc = rc.clone();
+        async move {
+            rc.fetch_add(1, Ordering::SeqCst);
+            panic!("always panics");
+        }
+    });
+
+    // Wait for the Failed event (exhausted 3 restarts + initial = 4 runs).
+    assert!(
+        wait_event(&mut events, 3000, |e| matches!(
+            e,
+            kathputli::SupervisionEvent::Failed { .. }
+        ))
+        .await,
+        "should emit Failed after exhausting max_restarts"
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!a.is_alive(), "spawn_once must die after escalation");
+    // Ran at least initial + max_restarts = 4 times
+    assert!(run_count.load(Ordering::SeqCst) >= 4);
+}
+
+#[tokio::test]
 async fn mailbox_preserved_across_restart() {
     let sys = ActorSystem::start();
 

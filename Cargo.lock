@@ -201,6 +201,7 @@ dependencies = [
  "futures-util",
  "proptest",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",

@@ -618,4 +618,25 @@ mod tests {
         let ev = rx.recv().await.unwrap();
         assert!(matches!(ev, SupervisionEvent::Stopped { id: got } if got == id));
     }
+
+    #[test]
+    fn panic_message_str_variant() {
+        // &str panic (most common)
+        let panic: Box<dyn std::any::Any + Send> = Box::new("oops");
+        assert_eq!(panic_message(panic).as_ref(), "oops");
+    }
+
+    #[test]
+    fn panic_message_string_variant() {
+        // String panic (less common but must be handled)
+        let panic: Box<dyn std::any::Any + Send> = Box::new(String::from("string panic"));
+        assert_eq!(panic_message(panic).as_ref(), "string panic");
+    }
+
+    #[test]
+    fn panic_message_unknown_variant() {
+        // Non-string panic payload falls back to "panic"
+        let panic: Box<dyn std::any::Any + Send> = Box::new(42u64);
+        assert_eq!(panic_message(panic).as_ref(), "panic");
+    }
 }
