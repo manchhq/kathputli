@@ -105,3 +105,15 @@ async fn handle_clone_communicates_independently() {
     let count = actor_ref.ask(CounterMsg::Get).await.unwrap();
     assert_eq!(count, 2);
 }
+
+#[tokio::test]
+async fn poison_drains_then_stops() {
+    let actor_ref = spawn_counter(0);
+    for _ in 0..5 {
+        actor_ref.tell(CounterMsg::Inc).unwrap();
+    }
+    actor_ref.poison();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(actor_ref.tell(CounterMsg::Inc).is_err());
+    assert!(!actor_ref.is_alive());
+}

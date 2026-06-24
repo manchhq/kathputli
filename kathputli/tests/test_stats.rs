@@ -95,3 +95,29 @@ async fn pool_all_dead_after_shutdown_all() {
     assert_eq!(pool.alive_count(), 0);
     assert_eq!(pool.dead_workers(), 4);
 }
+
+// ---------------------------------------------------------------------------
+// Stats busy flag
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn stats_busy_is_false_when_idle() {
+    let actor = spawn(Worker, 16);
+    // No message in flight → not busy.
+    assert!(!actor.stats().is_busy);
+}
+
+#[tokio::test]
+async fn stats_busy_true_while_handling() {
+    let actor = spawn(Worker, 16);
+    actor.tell(WorkerMsg::Slow).expect("enqueued"); // 50ms handler
+    // Give the loop a moment to dequeue and start handling.
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    assert!(actor.stats().is_busy, "actor should be busy mid-handle");
+    // After the slow handler finishes it goes idle again.
+    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    assert!(
+        !actor.stats().is_busy,
+        "actor should be idle after handling"
+    );
+}

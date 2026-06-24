@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Lock-free activity counters shared between an actor's receive loop and the
@@ -11,7 +11,14 @@ pub(crate) struct ActorStats {
     /// Millis since `base` at which the most recently handled message started.
     /// `0` means no message has been handled yet.
     last_activity_ms: AtomicU64,
+    busy: AtomicBool,
     base: Instant,
+}
+
+impl Default for ActorStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ActorStats {
@@ -19,6 +26,7 @@ impl ActorStats {
         Self {
             message_count: AtomicU64::new(0),
             last_activity_ms: AtomicU64::new(0),
+            busy: AtomicBool::new(false),
             base: Instant::now(),
         }
     }
@@ -33,6 +41,12 @@ impl ActorStats {
         let elapsed = self.base.elapsed().as_millis() as u64;
         self.last_activity_ms
             .store(elapsed.max(1), Ordering::Relaxed);
+        self.busy.store(true, Ordering::Relaxed);
+    }
+
+    /// Record that the actor finished handling the current message.
+    pub(crate) fn record_finish(&self) {
+        self.busy.store(false, Ordering::Relaxed);
     }
 
     /// Build a point-in-time view. `mailbox_depth` is read by the caller from
@@ -44,6 +58,7 @@ impl ActorStats {
             message_count: self.message_count.load(Ordering::Relaxed),
             mailbox_depth,
             last_activity,
+            is_busy: self.busy.load(Ordering::Relaxed),
         }
     }
 }
@@ -61,6 +76,8 @@ pub struct ActorStatsSnapshot {
     /// When the most recent message began handling, or `None` if the actor has
     /// not handled any message yet.
     pub last_activity: Option<Instant>,
+    /// `true` if the actor is currently inside `handle()` / `update()`.
+    pub is_busy: bool,
 }
 
 impl ActorStatsSnapshot {

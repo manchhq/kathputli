@@ -7,7 +7,7 @@ use crate::{Actor, ActorRef};
 /// A fixed-size pool of identical actors with round-robin dispatch.
 ///
 /// All workers run concurrently. Messages are distributed one-at-a-time in
-/// round-robin order. Use [`shutdown_all`] to cancel every worker at once.
+/// round-robin order. Use [`ActorPool::shutdown_all`] to cancel every worker at once.
 pub struct ActorPool<Msg: Send + 'static> {
     workers: Vec<ActorRef<Msg>>,
     next: AtomicUsize,

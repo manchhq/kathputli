@@ -66,6 +66,109 @@ async fn main() {
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `tracing` | Emit a `trace`-level span around every `handle()` call. Zero overhead without this feature. | off |
+| `system` | Opt-in supervised actor system: lifecycle tree, restart policies, status queries. Pulls in `futures-util` and `tokio-util`. | off |
+| `serde` | Derives `serde::Serialize` on `ActorStatus` and `ActorNode` (requires `system`). | off |
+
+## Actor System (opt-in)
+
+Enable the `system` feature in `Cargo.toml`:
+
+```toml
+[dependencies]
+kathputli = { version = "0.1", features = ["system"] }
+# add "serde" to the features list for JSON-serializable status snapshots
+```
+
+### Model: `init` + `update`
+
+Supervised actors are pure state machines. You provide two closures:
+
+- **`init(ctx: Context<M>) -> S`** — called once (and on each restart) to
+  produce the initial state. Takes a `Context` — use `|_ctx|` if you don't need it.
+- **`update(state: S, msg: M, ctx: Context<M>) -> impl Future<Output = S>`** —
+  called for each incoming message; returns the next state.
+
+The mailbox is **preserved across restarts** — no messages are lost on panic.
+
+### Restart policy
+
+Actors restart up to `max_restarts` times (default **3**) on panic.
+After the limit is exhausted the system emits `SupervisionEvent::Failed` and the
+actor dies permanently. There is no automatic restart past the limit.
+
+### Shutdown flavours
+
+| Method | Behaviour |
+|--------|-----------|
+| `actor_ref.poison()` | Drain pending mailbox messages, then stop (graceful). |
+| `sys.shutdown()` | Cancel root token immediately — cascades to all children. |
+
+### `spawn_once` — kamikaze actors
+
+`ActorSystem::spawn_once` (and `Context::spawn_once`) run a single async task to
+completion and then die. The same restart policy applies: up to `max_restarts`
+retries on panic, then escalate + die.
+
+### Status queries
+
+```rust,ignore
+// Whole-tree snapshot (Vec<ActorNode> — a recursive tree)
+let nodes = sys.status().tree().await;
+
+// Single actor by id
+let maybe = sys.status().actor(id).await;
+
+// Recent lifecycle events as formatted strings (bounded at 256 entries)
+let log = sys.status().recent_events().await;
+```
+
+### Example
+
+```rust,ignore
+use kathputli::ActorSystem;
+
+#[tokio::main]
+async fn main() {
+    let sys = ActorSystem::start();
+
+    // Stateful counter: init takes Context<M> (use _ctx if not needed)
+    let _counter = sys.spawn(
+        "counter",
+        |_ctx| 0u64,                           // init
+        |state, _msg: (), _ctx| async move {   // update
+            state + 1
+        },
+    );
+
+    // One-shot task (kamikaze): runs once and exits
+    sys.spawn_once("greeter", |_ctx| async move {
+        println!("hello once");
+    });
+
+    // Query the live supervision tree
+    let nodes = sys.status().tree().await;
+    println!("{} top-level actor(s)", nodes.len());
+
+    // Graceful system-wide stop
+    sys.shutdown();
+}
+```
+
+### `Context<M>` API
+
+Inside `update` (and `init`), the [`Context<M>`] gives access to:
+
+| Method | Returns |
+|--------|---------|
+| `ctx.id()` | `ActorId` — this actor's unique id |
+| `ctx.name()` | `&str` — registered name |
+| `ctx.parent_id()` | `Option<ActorId>` |
+| `ctx.myself()` | `ActorRef<M>` — self-message ref |
+| `ctx.system()` | `&ActorSystem` |
+| `ctx.spawn(name, init, update)` | `ActorRef<M2>` — supervised child |
+| `ctx.spawn_once(name, task)` | `ActorRef<()>` — kamikaze child |
+| `ctx.status()` | `StatusRef` — status actor handle |
+| `ctx.token_wait().await` | Parks until this actor's token is cancelled |
 
 ## Design decisions
 
@@ -89,12 +192,10 @@ There is no remoting, no location transparency, no sharding, and there never wil
 - **`ask`** applies backpressure: it calls `send().await` and waits for the mailbox to accept the message, then awaits the reply.
 - Messages are processed **sequentially**. An in-flight `handle()` always completes before shutdown — cancellation is only checked between messages.
 
-### Known sharp edge / roadmap
+### Known sharp edges / roadmap
 
-A panic inside `handle()` currently kills the actor task silently. Planned additions:
-
-1. **Restart-policy supervision** — an option to restart the actor on panic with configurable backoff.
-2. **`ActorRef::terminated()` watch** — a future that resolves when the actor task exits.
+- **Unsupervised actors** (`spawn` / `Actor` trait): a panic inside `handle()` still kills the actor task silently. Use the `system` feature for restart policies.
+- **Planned future work:** per-parent failure-handler callbacks, restart backoff / time-windows, optional `actor!` macro, trait → system adapter, state persistence.
 
 **Akka users:** this is deliberately `ActorRef` + mailbox only — no Behaviors, no DeathWatch, no Cluster. If you need those, use a different crate.
 
