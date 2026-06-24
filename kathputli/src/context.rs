@@ -20,7 +20,8 @@ use crate::supervisor::ActorSystem;
 /// `ActorRef`, and the supervising system. Cheap to clone — all fields are
 /// `Arc`/`Clone`.
 ///
-/// Child-spawning and `status()` come in Tasks 6/7 — do NOT add them here yet.
+/// Child-spawning is available via [`Context::spawn`] and [`Context::spawn_once`].
+/// Status query comes in Task 7.
 #[cfg(feature = "system")]
 pub struct Context<M: Send + 'static> {
     pub(crate) id: ActorId,
@@ -73,9 +74,39 @@ impl<M: Send + 'static> Context<M> {
         &self.system
     }
 
-    /// The actor's own cancellation token (cancelled when the actor stops).
-    #[allow(dead_code)] // Task 6
-    pub(crate) fn token(&self) -> &CancellationToken {
-        &self.token
+    /// Spawn a supervised child of this actor (cascade-linked to its lifetime).
+    pub fn spawn<M2, S, I, U, Fut>(
+        &self,
+        name: impl Into<String>,
+        init: I,
+        update: U,
+    ) -> ActorRef<M2>
+    where
+        M2: Send + 'static,
+        S: Send + 'static,
+        I: Fn(crate::context::Context<M2>) -> S + Send + Sync + 'static,
+        U: Fn(S, M2, crate::context::Context<M2>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = S> + Send,
+    {
+        let opts = crate::supervisor::SpawnOptions { name: name.into(), ..Default::default() };
+        self.system
+            .spawn_supervised(Some(self.id), self.token.child_token(), opts, init, update)
+    }
+
+    /// Spawn a kamikaze child of this actor.
+    pub fn spawn_once<F, Fut>(&self, name: impl Into<String>, task: F) -> ActorRef<()>
+    where
+        F: Fn(crate::context::Context<()>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send,
+    {
+        let opts = crate::supervisor::SpawnOptions { name: name.into(), ..Default::default() };
+        self.system
+            .spawn_once_supervised(Some(self.id), self.token.child_token(), opts, task)
+    }
+
+    /// Park until this actor's token is cancelled (handy for long-lived children
+    /// in `spawn_once`).
+    pub async fn token_wait(&self) {
+        self.token.cancelled().await;
     }
 }

@@ -29,7 +29,7 @@ async fn update_folds_state() {
     let sys = ActorSystem::new();
     let counter: kathputli::ActorRef<u32> = sys.spawn(
         "counter",
-        || 0u32,
+        |_ctx| 0u32,
         |state, msg: u32, _ctx: Context<u32>| async move { state + msg },
     );
     counter.tell(1).unwrap();
@@ -48,7 +48,7 @@ async fn restarts_on_panic_then_keeps_serving() {
 
     let actor: kathputli::ActorRef<String> = sys.spawn(
         "panicky",
-        || false, // have_panicked flag
+        |_ctx| false, // have_panicked flag
         |panicked: bool, msg: String, _ctx: Context<String>| async move {
             if !panicked && msg == "boom" {
                 panic!("intentional test panic");
@@ -83,7 +83,7 @@ async fn stops_after_max_restarts_and_escalates() {
 
     let actor: kathputli::ActorRef<()> = sys.spawn(
         "always_panics",
-        || (),
+        |_ctx| (),
         |_state: (), _msg: (), _ctx: Context<()>| async { panic!("always panics") },
     );
 
@@ -112,7 +112,7 @@ async fn supervised_poison_drains_and_stats_track() {
     use tokio::sync::oneshot;
     let sys = ActorSystem::new();
     enum M { Inc, Get(oneshot::Sender<u64>) }
-    let a = sys.spawn("p", || 0u64, |n, m, _c| async move {
+    let a = sys.spawn("p", |_ctx| 0u64, |n, m, _c| async move {
         match m { M::Inc => n + 1, M::Get(r) => { let _ = r.send(n); n } }
     });
     for _ in 0..3 { a.tell(M::Inc).unwrap(); }
@@ -125,4 +125,53 @@ async fn supervised_poison_drains_and_stats_track() {
     a.poison();
     tokio::time::sleep(std::time::Duration::from_millis(40)).await;
     assert!(!a.is_alive(), "poison should stop the supervised actor");
+}
+
+#[tokio::test]
+async fn spawn_once_runs_then_dies() {
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
+    let sys = ActorSystem::new();
+    let (tx, rx) = oneshot::channel();
+    let tx = Arc::new(Mutex::new(Some(tx)));
+    let actor = sys.spawn_once("job", move |_ctx| {
+        let tx = tx.clone();
+        async move {
+            if let Some(sender) = tx.lock().unwrap().take() {
+                let _ = sender.send(99u32);
+            }
+        }
+    });
+    let got = rx.await.unwrap();
+    assert_eq!(got, 99);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(!actor.is_alive(), "kamikaze actor reaped after completion");
+}
+
+#[tokio::test]
+async fn child_cascades_on_parent_shutdown() {
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
+    let sys = ActorSystem::new();
+    let (alive_tx, alive_rx) = oneshot::channel::<kathputli::ActorRef<()>>();
+    let alive_tx = Arc::new(Mutex::new(Some(alive_tx)));
+    let parent = sys.spawn(
+        "parent",
+        move |ctx| {
+            // Spawn a long-lived child the first time init runs.
+            let child = ctx.spawn_once("child", |cctx| async move {
+                cctx.token_wait().await; // lives until cancelled
+            });
+            if let Some(tx) = alive_tx.lock().unwrap().take() {
+                let _ = tx.send(child);
+            }
+            ()
+        },
+        |s, _m: (), _ctx| async move { s },
+    );
+    let child = alive_rx.await.unwrap();
+    assert!(child.is_alive());
+    parent.shutdown(); // cancels parent token → child token (descendant) cancels
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(!child.is_alive(), "child must cascade-stop with parent");
 }

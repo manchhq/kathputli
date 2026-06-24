@@ -169,7 +169,7 @@ impl ActorSystem {
     where
         M: Send + 'static,
         S: Send + 'static,
-        I: Fn() -> S + Send + Sync + 'static,
+        I: Fn(crate::context::Context<M>) -> S + Send + Sync + 'static,
         U: Fn(S, M, crate::context::Context<M>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = S> + Send,
     {
@@ -177,12 +177,13 @@ impl ActorSystem {
             name: name.into(),
             ..Default::default()
         };
-        self.spawn_supervised(None, opts, init, update)
+        self.spawn_supervised(None, self.root_token(), opts, init, update)
     }
 
     pub(crate) fn spawn_supervised<M, S, I, U, Fut>(
         &self,
         parent: Option<ActorId>,
+        parent_token: CancellationToken,
         opts: SpawnOptions,
         init: I,
         update: U,
@@ -190,7 +191,7 @@ impl ActorSystem {
     where
         M: Send + 'static,
         S: Send + 'static,
-        I: Fn() -> S + Send + Sync + 'static,
+        I: Fn(crate::context::Context<M>) -> S + Send + Sync + 'static,
         U: Fn(S, M, crate::context::Context<M>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = S> + Send,
     {
@@ -198,15 +199,16 @@ impl ActorSystem {
         use std::panic::AssertUnwindSafe;
 
         let id = ActorId::next();
-        let token = self.root_token().child_token();
+        let token = parent_token.child_token();
         let poison = CancellationToken::new();
         let (tx, mut rx) = mpsc::channel::<M>(opts.buffer);
         let stats = Arc::new(ActorStats::default());
         let name: Arc<str> = opts.name.as_str().into();
         let restarts = Arc::new(AtomicU32::new(0));
 
-        // depth_probe: always 0 for now (Task 6 replaces this)
-        let depth_probe: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(|| 0);
+        let probe_tx = tx.clone();
+        let depth_probe: Arc<dyn Fn() -> usize + Send + Sync> =
+            Arc::new(move || probe_tx.max_capacity() - probe_tx.capacity());
 
         let entry = SupervisedEntry {
             name: name.clone(),
@@ -273,6 +275,110 @@ impl ActorSystem {
 
         crate::ActorRef::new_with_poison(handle, token, poison)
     }
+
+    /// Spawn a kamikaze (one-shot) actor: runs `task` to completion, then dies.
+    /// Restart-on-panic still applies (up to `max_restarts`), then escalate+die.
+    pub fn spawn_once<F, Fut>(&self, name: impl Into<String>, task: F) -> crate::ActorRef<()>
+    where
+        F: Fn(crate::context::Context<()>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send,
+    {
+        let parent = *self.inner.root.lock().unwrap();
+        let parent_token = self.root_token();
+        let opts = SpawnOptions { name: name.into(), ..Default::default() };
+        self.spawn_once_supervised(parent, parent_token, opts, task)
+    }
+
+    pub(crate) fn spawn_once_supervised<F, Fut>(
+        &self,
+        parent: Option<ActorId>,
+        parent_token: CancellationToken,
+        opts: SpawnOptions,
+        task: F,
+    ) -> crate::ActorRef<()>
+    where
+        F: Fn(crate::context::Context<()>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send,
+    {
+        use futures_util::FutureExt;
+        use std::panic::AssertUnwindSafe;
+
+        let (tx, _rx) = mpsc::channel::<()>(opts.buffer);
+        let token = parent_token.child_token();
+        let poison = CancellationToken::new();
+        let stats = Arc::new(ActorStats::new());
+        let restarts = Arc::new(AtomicU32::new(0));
+        let id = ActorId::next();
+        let name: Arc<str> = Arc::from(opts.name.as_str());
+        let handle = ActorHandle { sender: tx.clone(), stats: stats.clone() };
+
+        let probe_tx = tx.clone();
+        let depth_probe: Arc<dyn Fn() -> usize + Send + Sync> =
+            Arc::new(move || probe_tx.max_capacity() - probe_tx.capacity());
+
+        self.register(
+            id,
+            SupervisedEntry {
+                name: name.clone(),
+                parent,
+                children: Vec::new(),
+                token: token.clone(),
+                stats: stats.clone(),
+                restarts: restarts.clone(),
+                depth_probe,
+            },
+        );
+        self.emit(SupervisionEvent::Spawned { id, name: name.clone(), parent });
+
+        let ctx = crate::context::Context {
+            id,
+            name: name.clone(),
+            parent,
+            token: token.clone(),
+            myself: crate::ActorRef::new_with_poison(handle.clone(), token.clone(), poison.clone()),
+            system: self.clone(),
+        };
+
+        let system = self.clone();
+        let loop_token = token.clone();
+        let max = opts.max_restarts;
+
+        tokio::spawn(async move {
+            loop {
+                let run = AssertUnwindSafe(async {
+                    stats.record_start();
+                    // Race the task against cancellation so shutdown is honored.
+                    tokio::select! {
+                        biased;
+                        _ = loop_token.cancelled() => {}
+                        _ = task(ctx.clone()) => {}
+                    }
+                    stats.record_finish();
+                });
+                match run.catch_unwind().await {
+                    Ok(()) => break,
+                    Err(panic) => {
+                        let n = restarts.fetch_add(1, Ordering::Relaxed) + 1;
+                        if n > max {
+                            let ancestry = system.ancestry(id);
+                            system.emit(SupervisionEvent::Failed {
+                                id,
+                                ancestry,
+                                error: panic_message(panic),
+                            });
+                            break;
+                        }
+                        system.emit(SupervisionEvent::Restarted { id, restarts: n });
+                    }
+                }
+            }
+            loop_token.cancel();
+            system.deregister(id);
+            system.emit(SupervisionEvent::Stopped { id });
+        });
+
+        crate::ActorRef::new_with_poison(handle, token, poison)
+    }
 }
 
 #[cfg(feature = "system")]
@@ -288,11 +394,11 @@ async fn run_incarnation<M, S, I, U, Fut>(
 ) where
     M: Send + 'static,
     S: Send + 'static,
-    I: Fn() -> S,
+    I: Fn(crate::context::Context<M>) -> S,
     U: Fn(S, M, crate::context::Context<M>) -> Fut,
     Fut: Future<Output = S>,
 {
-    let mut state = init();
+    let mut state = init(ctx.clone());
     let mut draining = false;
     loop {
         tokio::select! {
