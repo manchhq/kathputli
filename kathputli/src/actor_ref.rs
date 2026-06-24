@@ -34,7 +34,11 @@ impl<Msg: Send + 'static> ActorRef<Msg> {
         token: CancellationToken,
         poison: CancellationToken,
     ) -> Self {
-        Self { handle, token, poison }
+        Self {
+            handle,
+            token,
+            poison,
+        }
     }
 
     /// Fire-and-forget: send a message without waiting for a reply.

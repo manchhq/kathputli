@@ -111,15 +111,33 @@ async fn stops_after_max_restarts_and_escalates() {
 async fn supervised_poison_drains_and_stats_track() {
     use tokio::sync::oneshot;
     let sys = ActorSystem::new();
-    enum M { Inc, Get(oneshot::Sender<u64>) }
-    let a = sys.spawn("p", |_ctx| 0u64, |n, m, _c| async move {
-        match m { M::Inc => n + 1, M::Get(r) => { let _ = r.send(n); n } }
-    });
-    for _ in 0..3 { a.tell(M::Inc).unwrap(); }
+    enum M {
+        Inc,
+        Get(oneshot::Sender<u64>),
+    }
+    let a = sys.spawn(
+        "p",
+        |_ctx| 0u64,
+        |n, m, _c| async move {
+            match m {
+                M::Inc => n + 1,
+                M::Get(r) => {
+                    let _ = r.send(n);
+                    n
+                }
+            }
+        },
+    );
+    for _ in 0..3 {
+        a.tell(M::Inc).unwrap();
+    }
     // stats reflect handled messages
     let got = a.ask(M::Get).await.unwrap();
     assert_eq!(got, 3);
-    assert!(a.stats().message_count >= 3, "supervised stats must count messages");
+    assert!(
+        a.stats().message_count >= 3,
+        "supervised stats must count messages"
+    );
     // poison drains remaining then stops
     a.tell(M::Inc).unwrap();
     a.poison();
@@ -215,7 +233,10 @@ async fn status_records_lifecycle_events() {
     a.shutdown();
     tokio::time::sleep(std::time::Duration::from_millis(40)).await;
     let log = sys.status().recent_events().await;
-    assert!(log.iter().any(|e| e.contains("Spawned") && e.contains("ephemeral")));
+    assert!(
+        log.iter()
+            .any(|e| e.contains("Spawned") && e.contains("ephemeral"))
+    );
     assert!(log.iter().any(|e| e.contains("Stopped")));
 }
 
@@ -250,7 +271,10 @@ async fn no_zombie_after_stop() {
     };
     a.shutdown();
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-    assert!(sys.status().actor(id).await.is_none(), "entry must be reaped");
+    assert!(
+        sys.status().actor(id).await.is_none(),
+        "entry must be reaped"
+    );
 }
 
 #[tokio::test]
@@ -273,19 +297,28 @@ async fn one_for_one_isolation() {
     );
 
     // Sibling A: panics on demand.
-    enum AMsg { Boom }
+    enum AMsg {
+        Boom,
+    }
     let a = sys.spawn(
         "sibling-a",
         |_c| 0u64,
         |s, m: AMsg, _c| async move {
-            match m { AMsg::Boom => panic!("a down") }
-            #[allow(unreachable_code)] s
+            match m {
+                AMsg::Boom => panic!("a down"),
+            }
+            #[allow(unreachable_code)]
+            s
         },
     );
     a.tell(AMsg::Boom).unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
 
-    assert_eq!(sib_inits.load(Ordering::SeqCst), 1, "sibling B never restarted");
+    assert_eq!(
+        sib_inits.load(Ordering::SeqCst),
+        1,
+        "sibling B never restarted"
+    );
 }
 
 #[tokio::test]
@@ -330,7 +363,11 @@ async fn status_log_survives_event_burst() {
     let sys = ActorSystem::start();
     // Spawn many short-lived actors quickly to flood the lifecycle event stream.
     for i in 0..50 {
-        let a = sys.spawn(format!("burst-{i}"), |_c| 0u8, |s, _m: (), _c| async move { s });
+        let a = sys.spawn(
+            format!("burst-{i}"),
+            |_c| 0u8,
+            |s, _m: (), _c| async move { s },
+        );
         a.shutdown();
     }
     tokio::time::sleep(std::time::Duration::from_millis(120)).await;
@@ -349,7 +386,11 @@ async fn status_log_survives_event_burst() {
 async fn mailbox_preserved_across_restart() {
     let sys = ActorSystem::start();
 
-    enum M { Boom, Inc, Get(tokio::sync::oneshot::Sender<u64>) }
+    enum M {
+        Boom,
+        Inc,
+        Get(tokio::sync::oneshot::Sender<u64>),
+    }
     let a = sys.spawn(
         "preserve",
         |_c| 0u64,
@@ -357,7 +398,10 @@ async fn mailbox_preserved_across_restart() {
             match m {
                 M::Boom => panic!("kaboom"),
                 M::Inc => count + 1,
-                M::Get(reply) => { let _ = reply.send(count); count }
+                M::Get(reply) => {
+                    let _ = reply.send(count);
+                    count
+                }
             }
         },
     );

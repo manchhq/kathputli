@@ -62,10 +62,7 @@ impl StatusRef {
 
     /// Whole-tree snapshot (forest rooted at actors with no parent).
     pub async fn tree(&self) -> Vec<ActorNode> {
-        self.inner
-            .ask(StatusMsg::GetTree)
-            .await
-            .unwrap_or_default()
+        self.inner.ask(StatusMsg::GetTree).await.unwrap_or_default()
     }
 
     /// Snapshot of a single actor by id.
@@ -122,7 +119,10 @@ pub(crate) fn spawn_status_actor(system: &ActorSystem, root: ActorId) -> StatusR
         Some(root),
         parent_token,
         opts,
-        move |_ctx| StatusState { sys: sys_for_init.clone(), log: VecDeque::new() },
+        move |_ctx| StatusState {
+            sys: sys_for_init.clone(),
+            log: VecDeque::new(),
+        },
         |mut st, msg: StatusMsg, _ctx| async move {
             match msg {
                 StatusMsg::GetTree(reply) => {

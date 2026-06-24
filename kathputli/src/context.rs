@@ -88,7 +88,10 @@ impl<M: Send + 'static> Context<M> {
         U: Fn(S, M2, crate::context::Context<M2>) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = S> + Send,
     {
-        let opts = crate::supervisor::SpawnOptions { name: name.into(), ..Default::default() };
+        let opts = crate::supervisor::SpawnOptions {
+            name: name.into(),
+            ..Default::default()
+        };
         self.system
             .spawn_supervised(Some(self.id), self.token.child_token(), opts, init, update)
     }
@@ -99,7 +102,10 @@ impl<M: Send + 'static> Context<M> {
         F: Fn(crate::context::Context<()>) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = ()> + Send,
     {
-        let opts = crate::supervisor::SpawnOptions { name: name.into(), ..Default::default() };
+        let opts = crate::supervisor::SpawnOptions {
+            name: name.into(),
+            ..Default::default()
+        };
         self.system
             .spawn_once_supervised(Some(self.id), self.token.child_token(), opts, task)
     }

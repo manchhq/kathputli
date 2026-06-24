@@ -15,10 +15,23 @@ use crate::stats::ActorStats;
 /// Lifecycle events broadcast by the system. Subscribe via [`ActorSystem::events`].
 #[derive(Clone, Debug)]
 pub enum SupervisionEvent {
-    Spawned { id: ActorId, name: Arc<str>, parent: Option<ActorId> },
-    Restarted { id: ActorId, restarts: u32 },
-    Failed { id: ActorId, ancestry: Vec<ActorId>, error: Arc<str> },
-    Stopped { id: ActorId },
+    Spawned {
+        id: ActorId,
+        name: Arc<str>,
+        parent: Option<ActorId>,
+    },
+    Restarted {
+        id: ActorId,
+        restarts: u32,
+    },
+    Failed {
+        id: ActorId,
+        ancestry: Vec<ActorId>,
+        error: Arc<str>,
+    },
+    Stopped {
+        id: ActorId,
+    },
 }
 
 /// Tuning for a supervised actor.
@@ -31,7 +44,11 @@ pub struct SpawnOptions {
 
 impl Default for SpawnOptions {
     fn default() -> Self {
-        Self { name: String::new(), max_restarts: 3, buffer: 16 }
+        Self {
+            name: String::new(),
+            max_restarts: 3,
+            buffer: 16,
+        }
     }
 }
 
@@ -143,7 +160,14 @@ impl ActorSystem {
     pub(crate) fn read_tree(&self) -> HashMap<ActorId, TreeView> {
         let tree = self.inner.tree.lock().unwrap();
         tree.iter()
-            .map(|(id, e)| (*id, TreeView { children: e.children.clone() }))
+            .map(|(id, e)| {
+                (
+                    *id,
+                    TreeView {
+                        children: e.children.clone(),
+                    },
+                )
+            })
             .collect()
     }
 
@@ -239,9 +263,16 @@ impl ActorSystem {
             depth_probe,
         };
         self.register(id, entry);
-        self.emit(SupervisionEvent::Spawned { id, name: name.clone(), parent });
+        self.emit(SupervisionEvent::Spawned {
+            id,
+            name: name.clone(),
+            parent,
+        });
 
-        let handle = ActorHandle { sender: tx, stats: stats.clone() };
+        let handle = ActorHandle {
+            sender: tx,
+            stats: stats.clone(),
+        };
 
         let ctx = crate::context::Context {
             id,
@@ -319,7 +350,10 @@ impl ActorSystem {
                 (None, self.root_token())
             }
         };
-        let opts = SpawnOptions { name: name.into(), ..Default::default() };
+        let opts = SpawnOptions {
+            name: name.into(),
+            ..Default::default()
+        };
         self.spawn_once_supervised(parent, parent_token, opts, task)
     }
 
@@ -344,7 +378,10 @@ impl ActorSystem {
         let restarts = Arc::new(AtomicU32::new(0));
         let id = ActorId::next();
         let name: Arc<str> = Arc::from(opts.name.as_str());
-        let handle = ActorHandle { sender: tx.clone(), stats: stats.clone() };
+        let handle = ActorHandle {
+            sender: tx.clone(),
+            stats: stats.clone(),
+        };
 
         let probe_tx = tx.clone();
         let depth_probe: Arc<dyn Fn() -> usize + Send + Sync> =
@@ -362,7 +399,11 @@ impl ActorSystem {
                 depth_probe,
             },
         );
-        self.emit(SupervisionEvent::Spawned { id, name: name.clone(), parent });
+        self.emit(SupervisionEvent::Spawned {
+            id,
+            name: name.clone(),
+            parent,
+        });
 
         let ctx = crate::context::Context {
             id,
@@ -429,7 +470,10 @@ impl ActorSystem {
         let root_ref = sys.spawn_supervised(
             None,
             root_token,
-            SpawnOptions { name: "root".to_string(), ..Default::default() },
+            SpawnOptions {
+                name: "root".to_string(),
+                ..Default::default()
+            },
             |_ctx| (),
             |s, _m: (), _ctx| async move { s }, // never receives (handle kept private)
         );
@@ -505,10 +549,7 @@ fn status_of(id: ActorId, e: &SupervisedEntry) -> crate::status::ActorStatus {
     }
 }
 
-fn build_node(
-    tree: &HashMap<ActorId, SupervisedEntry>,
-    id: ActorId,
-) -> crate::status::ActorNode {
+fn build_node(tree: &HashMap<ActorId, SupervisedEntry>, id: ActorId) -> crate::status::ActorNode {
     let e = &tree[&id];
     let children = e
         .children
@@ -516,7 +557,10 @@ fn build_node(
         .filter(|c| tree.contains_key(c))
         .map(|c| build_node(tree, *c))
         .collect();
-    crate::status::ActorNode { status: status_of(id, e), children }
+    crate::status::ActorNode {
+        status: status_of(id, e),
+        children,
+    }
 }
 
 #[cfg(feature = "system")]

@@ -79,13 +79,13 @@ pub mod registry;
 pub mod stats;
 
 #[cfg(feature = "system")]
-pub mod id;
-#[cfg(feature = "system")]
 pub mod context;
 #[cfg(feature = "system")]
-pub mod supervisor;
+pub mod id;
 #[cfg(feature = "system")]
 pub mod status;
+#[cfg(feature = "system")]
+pub mod supervisor;
 
 pub use actor::Actor;
 pub use actor_ref::ActorRef;
@@ -96,10 +96,10 @@ pub use registry::ActorRegistry;
 pub use stats::ActorStatsSnapshot;
 
 #[cfg(feature = "system")]
-pub use id::ActorId;
-#[cfg(feature = "system")]
 pub use context::Context;
 #[cfg(feature = "system")]
-pub use supervisor::{ActorSystem, SpawnOptions, SupervisionEvent};
+pub use id::ActorId;
 #[cfg(feature = "system")]
 pub use status::{ActorNode, ActorStatus, StatusMsg, StatusRef};
+#[cfg(feature = "system")]
+pub use supervisor::{ActorSystem, SpawnOptions, SupervisionEvent};

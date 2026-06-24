@@ -116,5 +116,8 @@ async fn stats_busy_true_while_handling() {
     assert!(actor.stats().is_busy, "actor should be busy mid-handle");
     // After the slow handler finishes it goes idle again.
     tokio::time::sleep(std::time::Duration::from_millis(60)).await;
-    assert!(!actor.stats().is_busy, "actor should be idle after handling");
+    assert!(
+        !actor.stats().is_busy,
+        "actor should be idle after handling"
+    );
 }
