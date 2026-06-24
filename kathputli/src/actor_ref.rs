@@ -7,9 +7,9 @@ use crate::stats::ActorStatsSnapshot;
 
 /// Lifecycle-aware wrapper around [`ActorHandle`].
 ///
-/// The owner of `ActorRef` controls the actor's lifetime via [`shutdown`].
+/// The owner of `ActorRef` controls the actor's lifetime via [`ActorRef::shutdown`].
 /// Communicators that only need to send messages should receive a cloned
-/// [`ActorHandle`] via [`handle`].
+/// [`ActorHandle`] via [`ActorRef::handle`].
 pub struct ActorRef<Msg: Send + 'static> {
     handle: ActorHandle<Msg>,
     token: CancellationToken,
@@ -56,7 +56,7 @@ impl<Msg: Send + 'static> ActorRef<Msg> {
     }
 
     /// Graceful stop: stop accepting new messages, drain what is already
-    /// queued, then exit. Contrast with [`shutdown`], which stops as soon as
+    /// queued, then exit. Contrast with [`ActorRef::shutdown`], which stops as soon as
     /// the in-flight message completes.
     pub fn poison(&self) {
         self.poison.cancel();
