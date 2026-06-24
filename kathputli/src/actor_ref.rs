@@ -27,11 +27,8 @@ impl<Msg: Send + 'static> Clone for ActorRef<Msg> {
 }
 
 impl<Msg: Send + 'static> ActorRef<Msg> {
-    pub(crate) fn new(handle: ActorHandle<Msg>, token: CancellationToken) -> Self {
-        Self { handle, token, poison: CancellationToken::new() }
-    }
-
-    /// Like [`new`] but with an explicit poison token (used by the supervisor).
+    /// Construct a ref with an explicit poison token (used by [`spawn`] and the
+    /// supervisor).
     pub(crate) fn new_with_poison(
         handle: ActorHandle<Msg>,
         token: CancellationToken,
