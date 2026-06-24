@@ -15,6 +15,9 @@ use crate::supervisor::ActorSystem;
 pub enum StatusMsg {
     GetTree(oneshot::Sender<Vec<ActorNode>>),
     GetActor(ActorId, oneshot::Sender<Option<ActorStatus>>),
+    RecentEvents(oneshot::Sender<Vec<String>>),
+    /// Internal: fed by the event forwarder.
+    Event(crate::supervisor::SupervisionEvent),
 }
 
 /// Point-in-time status of one actor.
@@ -74,6 +77,14 @@ impl StatusRef {
             .flatten()
     }
 
+    /// Recent lifecycle events as formatted strings (bounded log, up to 256 entries).
+    pub async fn recent_events(&self) -> Vec<String> {
+        self.inner
+            .ask(StatusMsg::RecentEvents)
+            .await
+            .unwrap_or_default()
+    }
+
     /// Raw ref (for advanced use / custom messages).
     pub fn raw(&self) -> &ActorRef<StatusMsg> {
         &self.inner
@@ -81,9 +92,18 @@ impl StatusRef {
 }
 
 /// Build the per-message status behavior. The actor reads the live system tree
-/// on each query (pull model for structure + busy/idle).
+/// on each query (pull model for structure + busy/idle). Also maintains a
+/// bounded recent-events log fed by a forwarder task (push model).
 #[cfg(feature = "system")]
 pub(crate) fn spawn_status_actor(system: &ActorSystem, root: ActorId) -> StatusRef {
+    use std::collections::VecDeque;
+
+    struct StatusState {
+        sys: ActorSystem,
+        log: VecDeque<String>,
+    }
+    const LOG_CAP: usize = 256;
+
     let sys_for_init = system.clone();
     let parent_token = system
         .inner
@@ -97,27 +117,51 @@ pub(crate) fn spawn_status_actor(system: &ActorSystem, root: ActorId) -> StatusR
         name: "status".to_string(),
         ..Default::default()
     };
+
     let actor = system.spawn_supervised(
         Some(root),
         parent_token,
         opts,
-        move |_ctx| sys_for_init.clone(), // state = a system handle for reads
-        |sys, msg: StatusMsg, _ctx| async move {
+        move |_ctx| StatusState { sys: sys_for_init.clone(), log: VecDeque::new() },
+        |mut st, msg: StatusMsg, _ctx| async move {
             match msg {
                 StatusMsg::GetTree(reply) => {
-                    let _ = reply.send(sys.snapshot_forest());
+                    let _ = reply.send(st.sys.snapshot_forest());
                 }
                 StatusMsg::GetActor(id, reply) => {
-                    let _ = reply.send(sys.snapshot_actor(id));
+                    let _ = reply.send(st.sys.snapshot_actor(id));
+                }
+                StatusMsg::RecentEvents(reply) => {
+                    let _ = reply.send(st.log.iter().cloned().collect());
+                }
+                StatusMsg::Event(ev) => {
+                    if st.log.len() == LOG_CAP {
+                        st.log.pop_front();
+                    }
+                    st.log.push_back(format!("{ev:?}"));
                 }
             }
-            sys
+            st
         },
     );
-    StatusRef::new(actor)
-}
+    let status = StatusRef::new(actor);
 
-/// Placeholder for non-system builds (satisfies the type in Inner).
-#[cfg(not(feature = "system"))]
-#[derive(Clone)]
-pub struct StatusRef;
+    // Forwarder: stream lifecycle events into the status actor's log.
+    let mut rx = system.events();
+    let sink = status.raw().handle().clone();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    if sink.tell(StatusMsg::Event(ev)).is_err() {
+                        break; // status actor gone
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+
+    status
+}

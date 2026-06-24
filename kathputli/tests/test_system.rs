@@ -206,3 +206,24 @@ async fn child_cascades_on_parent_shutdown() {
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     assert!(!child.is_alive(), "child must cascade-stop with parent");
 }
+
+#[tokio::test]
+async fn status_records_lifecycle_events() {
+    let sys = ActorSystem::start();
+    // Spawn then shut down a worker; both events should reach the log.
+    let a = sys.spawn("ephemeral", |_c| 0u8, |s, _m: (), _c| async move { s });
+    a.shutdown();
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    let log = sys.status().recent_events().await;
+    assert!(log.iter().any(|e| e.contains("Spawned") && e.contains("ephemeral")));
+    assert!(log.iter().any(|e| e.contains("Stopped")));
+}
+
+#[cfg(feature = "serde")]
+#[tokio::test]
+async fn status_snapshot_serializes() {
+    let sys = ActorSystem::start();
+    let tree = sys.status().tree().await;
+    let json = serde_json::to_string(&tree).expect("serialize tree");
+    assert!(json.contains("\"name\":\"root\""));
+}
