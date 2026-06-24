@@ -27,7 +27,7 @@ pub use stats::ActorStatsSnapshot;
 pub use id::ActorId;
 // #[cfg(feature = "system")]
 // pub use context::Context;
-// #[cfg(feature = "system")]
-// pub use supervisor::{ActorSystem, SpawnOptions, SupervisionEvent};
+#[cfg(feature = "system")]
+pub use supervisor::{ActorSystem, SpawnOptions, SupervisionEvent};
 // #[cfg(feature = "system")]
 // pub use status::{ActorNode, ActorStatus, StatusMsg, StatusRef};
