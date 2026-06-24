@@ -149,6 +149,37 @@ async fn spawn_once_runs_then_dies() {
 }
 
 #[tokio::test]
+async fn start_brings_up_root_and_status() {
+    let sys = ActorSystem::start();
+    let tree = sys.status().tree().await;
+    // Forest has a single root; status actor is its child.
+    assert_eq!(tree.len(), 1, "exactly one root");
+    let root = &tree[0];
+    assert_eq!(root.status.name, "root");
+    assert!(root.children.iter().any(|c| c.status.name == "status"));
+}
+
+#[tokio::test]
+async fn spawned_actor_appears_under_root() {
+    let sys = ActorSystem::start();
+    let _a = sys.spawn("worker", |_c| 0u8, |s, _m: (), _c| async move { s });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let tree = sys.status().tree().await;
+    let root = &tree[0];
+    assert!(root.children.iter().any(|c| c.status.name == "worker"));
+}
+
+#[tokio::test]
+async fn system_shutdown_stops_everything() {
+    let sys = ActorSystem::start();
+    let a = sys.spawn("worker", |_c| 0u8, |s, _m: (), _c| async move { s });
+    assert!(a.is_alive());
+    sys.shutdown();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(!a.is_alive(), "cascade from root stops workers");
+}
+
+#[tokio::test]
 async fn child_cascades_on_parent_shutdown() {
     use std::sync::{Arc, Mutex};
     use tokio::sync::oneshot;

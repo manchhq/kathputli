@@ -29,5 +29,5 @@ pub use id::ActorId;
 pub use context::Context;
 #[cfg(feature = "system")]
 pub use supervisor::{ActorSystem, SpawnOptions, SupervisionEvent};
-// #[cfg(feature = "system")]
-// pub use status::{ActorNode, ActorStatus, StatusMsg, StatusRef};
+#[cfg(feature = "system")]
+pub use status::{ActorNode, ActorStatus, StatusMsg, StatusRef};

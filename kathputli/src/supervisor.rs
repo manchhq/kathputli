@@ -56,11 +56,13 @@ pub(crate) struct Inner {
     /// Root cancellation token; child tokens cascade from here.
     pub(crate) token: CancellationToken,
     /// Set once the status actor is up (see Task 7). `None` in `bare()`.
-    #[allow(dead_code)] // populated by Task 7
     pub(crate) status: Mutex<Option<crate::status::StatusRef>>,
     /// Set once the root actor is up (see Task 7).
-    #[allow(dead_code)] // populated by Task 7
     pub(crate) root: Mutex<Option<ActorId>>,
+    /// Keeps the root actor's mailbox alive so the root never exits on its own.
+    /// `None` in `bare()`, set in `start()`.
+    #[cfg(feature = "system")]
+    pub(crate) root_ref: Mutex<Option<crate::actor_ref::ActorRef<()>>>,
 }
 
 /// The supervising actor system. Cheap to clone (`Arc` inside).
@@ -83,6 +85,8 @@ impl ActorSystem {
                 token: CancellationToken::new(),
                 status: Mutex::new(None),
                 root: Mutex::new(None),
+                #[cfg(feature = "system")]
+                root_ref: Mutex::new(None),
             }),
         }
     }
@@ -177,7 +181,22 @@ impl ActorSystem {
             name: name.into(),
             ..Default::default()
         };
-        self.spawn_supervised(None, self.root_token(), opts, init, update)
+        // If a root actor exists (system was started via `start()`), attach to it
+        // so the actor is cascade-stopped when the system shuts down.
+        let (parent, parent_token) = {
+            let root_guard = self.inner.root.lock().unwrap();
+            if let Some(root_id) = *root_guard {
+                let tree = self.inner.tree.lock().unwrap();
+                let token = tree
+                    .get(&root_id)
+                    .map(|e| e.token.clone())
+                    .unwrap_or_else(|| self.root_token());
+                (Some(root_id), token)
+            } else {
+                (None, self.root_token())
+            }
+        };
+        self.spawn_supervised(parent, parent_token, opts, init, update)
     }
 
     pub(crate) fn spawn_supervised<M, S, I, U, Fut>(
@@ -283,8 +302,19 @@ impl ActorSystem {
         F: Fn(crate::context::Context<()>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send,
     {
-        let parent = *self.inner.root.lock().unwrap();
-        let parent_token = self.root_token();
+        let (parent, parent_token) = {
+            let root_guard = self.inner.root.lock().unwrap();
+            if let Some(root_id) = *root_guard {
+                let tree = self.inner.tree.lock().unwrap();
+                let token = tree
+                    .get(&root_id)
+                    .map(|e| e.token.clone())
+                    .unwrap_or_else(|| self.root_token());
+                (Some(root_id), token)
+            } else {
+                (None, self.root_token())
+            }
+        };
         let opts = SpawnOptions { name: name.into(), ..Default::default() };
         self.spawn_once_supervised(parent, parent_token, opts, task)
     }
@@ -379,6 +409,106 @@ impl ActorSystem {
 
         crate::ActorRef::new_with_poison(handle, token, poison)
     }
+
+    // ── System bootstrap ────────────────────────────────────────────────────
+
+    /// Start a system: brings up a root actor and a status actor (child of root).
+    pub fn start() -> Self {
+        let sys = ActorSystem::bare();
+
+        // Root actor: a parked actor that anchors the tree and shutdown.
+        let root_token = sys.inner.token.clone();
+        let root_ref = sys.spawn_supervised(
+            None,
+            root_token,
+            SpawnOptions { name: "root".to_string(), ..Default::default() },
+            |_ctx| (),
+            |s, _m: (), _ctx| async move { s }, // never receives (handle kept private)
+        );
+
+        // Find the root id we just registered (the only parentless entry).
+        let root_id = {
+            let tree = sys.inner.tree.lock().unwrap();
+            tree.iter()
+                .find(|(_, e)| e.parent.is_none())
+                .map(|(id, _)| *id)
+                .expect("root registered")
+        };
+        *sys.inner.root.lock().unwrap() = Some(root_id);
+
+        // Keep the root handle alive so the root never exits on its own.
+        *sys.inner.root_ref.lock().unwrap() = Some(root_ref);
+
+        let status = crate::status::spawn_status_actor(&sys, root_id);
+        *sys.inner.status.lock().unwrap() = Some(status);
+
+        sys
+    }
+
+    /// Handle to the status actor (panics if called on a `bare()` system).
+    pub fn status(&self) -> crate::status::StatusRef {
+        self.inner
+            .status
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("status actor not started; use ActorSystem::start()")
+    }
+
+    /// Shut the whole system down by cancelling the root token (cascades).
+    pub fn shutdown(&self) {
+        if let Some(root) = *self.inner.root.lock().unwrap() {
+            if let Some(e) = self.inner.tree.lock().unwrap().get(&root) {
+                e.token.cancel();
+            }
+        }
+    }
+
+    // ── Snapshot readers ────────────────────────────────────────────────────
+
+    pub(crate) fn snapshot_actor(&self, id: ActorId) -> Option<crate::status::ActorStatus> {
+        let tree = self.inner.tree.lock().unwrap();
+        tree.get(&id).map(|e| status_of(id, e))
+    }
+
+    pub(crate) fn snapshot_forest(&self) -> Vec<crate::status::ActorNode> {
+        let tree = self.inner.tree.lock().unwrap();
+        let roots: Vec<ActorId> = tree
+            .iter()
+            .filter(|(_, e)| e.parent.is_none())
+            .map(|(id, _)| *id)
+            .collect();
+        roots.into_iter().map(|id| build_node(&tree, id)).collect()
+    }
+}
+
+fn status_of(id: ActorId, e: &SupervisedEntry) -> crate::status::ActorStatus {
+    let snap = e.stats.snapshot((e.depth_probe)());
+    crate::status::ActorStatus {
+        id,
+        name: e.name.to_string(),
+        parent: e.parent,
+        alive: !e.token.is_cancelled(),
+        busy: snap.is_busy,
+        mailbox_depth: snap.mailbox_depth,
+        message_count: snap.message_count,
+        restarts: e.restarts.load(Ordering::Relaxed),
+        idle_ms: snap.idle_for().map(|d| d.as_millis() as u64),
+    }
+}
+
+fn build_node(
+    tree: &HashMap<ActorId, SupervisedEntry>,
+    id: ActorId,
+) -> crate::status::ActorNode {
+    let e = &tree[&id];
+    let children = e
+        .children
+        .iter()
+        .filter(|c| tree.contains_key(c))
+        .map(|c| build_node(tree, *c))
+        .collect();
+    crate::status::ActorNode { status: status_of(id, e), children }
 }
 
 #[cfg(feature = "system")]

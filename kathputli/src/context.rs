@@ -109,4 +109,9 @@ impl<M: Send + 'static> Context<M> {
     pub async fn token_wait(&self) {
         self.token.cancelled().await;
     }
+
+    /// Handle to the system's status actor.
+    pub fn status(&self) -> crate::status::StatusRef {
+        self.system.status()
+    }
 }
