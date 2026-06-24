@@ -13,6 +13,7 @@ use crate::stats::ActorStatsSnapshot;
 pub struct ActorRef<Msg: Send + 'static> {
     handle: ActorHandle<Msg>,
     token: CancellationToken,
+    poison: CancellationToken,
 }
 
 impl<Msg: Send + 'static> Clone for ActorRef<Msg> {
@@ -20,13 +21,23 @@ impl<Msg: Send + 'static> Clone for ActorRef<Msg> {
         Self {
             handle: self.handle.clone(),
             token: self.token.clone(),
+            poison: self.poison.clone(),
         }
     }
 }
 
 impl<Msg: Send + 'static> ActorRef<Msg> {
     pub(crate) fn new(handle: ActorHandle<Msg>, token: CancellationToken) -> Self {
-        Self { handle, token }
+        Self { handle, token, poison: CancellationToken::new() }
+    }
+
+    /// Like [`new`] but with an explicit poison token (used by the supervisor).
+    pub(crate) fn new_with_poison(
+        handle: ActorHandle<Msg>,
+        token: CancellationToken,
+        poison: CancellationToken,
+    ) -> Self {
+        Self { handle, token, poison }
     }
 
     /// Fire-and-forget: send a message without waiting for a reply.
@@ -45,6 +56,13 @@ impl<Msg: Send + 'static> ActorRef<Msg> {
     /// any in-flight `handle()` call completes.
     pub fn shutdown(&self) {
         self.token.cancel();
+    }
+
+    /// Graceful stop: stop accepting new messages, drain what is already
+    /// queued, then exit. Contrast with [`shutdown`], which stops as soon as
+    /// the in-flight message completes.
+    pub fn poison(&self) {
+        self.poison.cancel();
     }
 
     /// Returns `true` if the actor has not yet been shut down.

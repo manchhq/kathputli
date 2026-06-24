@@ -80,25 +80,35 @@ pub fn spawn<A: Actor>(mut actor: A, buffer: usize) -> ActorRef<A::Msg> {
     let (tx, mut rx) = mpsc::channel(buffer);
     let token = CancellationToken::new();
     let token_loop = token.clone();
+    let poison = CancellationToken::new();
+    let poison_loop = poison.clone();
     let stats = Arc::new(ActorStats::new());
     let stats_loop = stats.clone();
     tokio::spawn(async move {
+        let mut draining = false;
         loop {
             tokio::select! {
                 biased;
                 _ = token_loop.cancelled() => break,
+                _ = poison_loop.cancelled(), if !draining => {
+                    rx.close();      // reject new sends; buffered messages still drain
+                    draining = true;
+                }
                 msg = rx.recv() => match msg {
                     Some(m) => {
                         stats_loop.record_start();
                         handle_one(&mut actor, m).await;
                         stats_loop.record_finish();
                     }
-                    None => break,
+                    None => {
+                        token_loop.cancel();
+                        break;
+                    }
                 },
             }
         }
     });
-    ActorRef::new(ActorHandle { sender: tx, stats }, token)
+    ActorRef::new_with_poison(ActorHandle { sender: tx, stats }, token, poison)
 }
 
 /// Dispatch a single message to the actor.
