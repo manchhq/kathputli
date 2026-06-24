@@ -15,6 +15,12 @@ pub(crate) struct ActorStats {
     base: Instant,
 }
 
+impl Default for ActorStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ActorStats {
     pub(crate) fn new() -> Self {
         Self {

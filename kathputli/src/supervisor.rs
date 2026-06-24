@@ -1,21 +1,23 @@
 //! Supervising actor system: lifecycle tree, restart, escalation.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU32;
+use std::future::Future;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
+use crate::handle::ActorHandle;
 use crate::id::ActorId;
 use crate::stats::ActorStats;
 
 /// Lifecycle events broadcast by the system. Subscribe via [`ActorSystem::events`].
 #[derive(Clone, Debug)]
 pub enum SupervisionEvent {
-    Spawned { id: ActorId, name: String, parent: Option<ActorId> },
+    Spawned { id: ActorId, name: Arc<str>, parent: Option<ActorId> },
     Restarted { id: ActorId, restarts: u32 },
-    Failed { id: ActorId, ancestry: Vec<ActorId>, error: String },
+    Failed { id: ActorId, ancestry: Vec<ActorId>, error: Arc<str> },
     Stopped { id: ActorId },
 }
 
@@ -34,8 +36,9 @@ impl Default for SpawnOptions {
 }
 
 /// Type-erased lifecycle record for one supervised actor.
-// Fields populated here but consumed by the spawn/restart/status logic in Tasks 5-8.
-#[allow(dead_code)]
+// Fields are written here; `name`/`token`/`stats`/`restarts`/`depth_probe`
+// are read by the status/child-spawn logic arriving in Tasks 6-8.
+#[allow(dead_code)] // Task 6–8
 pub(crate) struct SupervisedEntry {
     pub(crate) name: Arc<str>,
     pub(crate) parent: Option<ActorId>,
@@ -48,11 +51,10 @@ pub(crate) struct SupervisedEntry {
 }
 
 pub(crate) struct Inner {
-    // Read by register/deregister/ancestry (exercised by this task's tests); the
-    // spawn path that mutates it outside tests arrives in Task 5.
-    #[allow(dead_code)]
     pub(crate) tree: Mutex<HashMap<ActorId, SupervisedEntry>>,
     pub(crate) events: broadcast::Sender<SupervisionEvent>,
+    /// Root cancellation token; child tokens cascade from here.
+    pub(crate) token: CancellationToken,
     /// Set once the status actor is up (see Task 7). `None` in `bare()`.
     #[allow(dead_code)] // populated by Task 7
     pub(crate) status: Mutex<Option<crate::status::StatusRef>>,
@@ -72,17 +74,22 @@ impl ActorSystem {
     /// base for [`start`](ActorSystem::start) (see Task 7).
     // Exercised by this task's tests (cfg(test)); the non-test spawn path that
     // calls bare/register/deregister/ancestry/emit lands in Task 5.
-    #[allow(dead_code)]
     pub(crate) fn bare() -> Self {
         let (events, _) = broadcast::channel(256);
         ActorSystem {
             inner: Arc::new(Inner {
                 tree: Mutex::new(HashMap::new()),
                 events,
+                token: CancellationToken::new(),
                 status: Mutex::new(None),
                 root: Mutex::new(None),
             }),
         }
+    }
+
+    /// Public constructor — creates a fresh system with a root cancellation token.
+    pub fn new() -> Self {
+        Self::bare()
     }
 
     /// Subscribe to lifecycle events.
@@ -90,12 +97,10 @@ impl ActorSystem {
         self.inner.events.subscribe()
     }
 
-    #[allow(dead_code)] // exercised by tests; non-test callers arrive in Task 5
     pub(crate) fn emit(&self, ev: SupervisionEvent) {
         let _ = self.inner.events.send(ev); // Err only means no subscribers.
     }
 
-    #[allow(dead_code)] // exercised by tests; non-test callers arrive in Task 5
     pub(crate) fn register(&self, id: ActorId, entry: SupervisedEntry) {
         let mut tree = self.inner.tree.lock().unwrap();
         if let Some(parent) = entry.parent {
@@ -106,7 +111,6 @@ impl ActorSystem {
         tree.insert(id, entry);
     }
 
-    #[allow(dead_code)] // exercised by tests; non-test callers arrive in Task 5
     pub(crate) fn deregister(&self, id: ActorId) {
         let mut tree = self.inner.tree.lock().unwrap();
         if let Some(entry) = tree.remove(&id) {
@@ -119,7 +123,6 @@ impl ActorSystem {
     }
 
     /// Parent chain from `id` (exclusive) up to the root, nearest first.
-    #[allow(dead_code)] // exercised by tests; non-test callers arrive in Task 5
     pub(crate) fn ancestry(&self, id: ActorId) -> Vec<ActorId> {
         let tree = self.inner.tree.lock().unwrap();
         let mut out = Vec::new();
@@ -138,6 +141,186 @@ impl ActorSystem {
         tree.iter()
             .map(|(id, e)| (*id, TreeView { children: e.children.clone() }))
             .collect()
+    }
+
+    pub(crate) fn root_token(&self) -> CancellationToken {
+        self.inner.token.clone()
+    }
+}
+
+impl Default for ActorSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "system")]
+impl ActorSystem {
+    /// Spawn a supervised actor with `init`/`update` lifecycle.
+    ///
+    /// Returns an `ActorRef<M>` whose channel is backed by the supervised
+    /// mailbox — messages survive restarts.
+    pub fn spawn<M, S, I, U, Fut>(
+        &self,
+        name: impl Into<String>,
+        init: I,
+        update: U,
+    ) -> crate::ActorRef<M>
+    where
+        M: Send + 'static,
+        S: Send + 'static,
+        I: Fn() -> S + Send + Sync + 'static,
+        U: Fn(S, M, crate::context::Context<M>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = S> + Send,
+    {
+        let opts = SpawnOptions {
+            name: name.into(),
+            ..Default::default()
+        };
+        self.spawn_supervised(None, opts, init, update)
+    }
+
+    pub(crate) fn spawn_supervised<M, S, I, U, Fut>(
+        &self,
+        parent: Option<ActorId>,
+        opts: SpawnOptions,
+        init: I,
+        update: U,
+    ) -> crate::ActorRef<M>
+    where
+        M: Send + 'static,
+        S: Send + 'static,
+        I: Fn() -> S + Send + Sync + 'static,
+        U: Fn(S, M, crate::context::Context<M>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = S> + Send,
+    {
+        use futures_util::FutureExt;
+        use std::panic::AssertUnwindSafe;
+
+        let id = ActorId::next();
+        let token = self.root_token().child_token();
+        let poison = CancellationToken::new();
+        let (tx, mut rx) = mpsc::channel::<M>(opts.buffer);
+        let stats = Arc::new(ActorStats::default());
+        let name: Arc<str> = opts.name.as_str().into();
+        let restarts = Arc::new(AtomicU32::new(0));
+
+        // depth_probe: always 0 for now (Task 6 replaces this)
+        let depth_probe: Arc<dyn Fn() -> usize + Send + Sync> = Arc::new(|| 0);
+
+        let entry = SupervisedEntry {
+            name: name.clone(),
+            parent,
+            children: Vec::new(),
+            token: token.clone(),
+            stats: stats.clone(),
+            restarts: restarts.clone(),
+            depth_probe,
+        };
+        self.register(id, entry);
+        self.emit(SupervisionEvent::Spawned { id, name: name.clone(), parent });
+
+        let handle = ActorHandle { sender: tx, stats: stats.clone() };
+
+        let ctx = crate::context::Context {
+            id,
+            name: name.clone(),
+            parent,
+            token: token.clone(),
+            myself: crate::ActorRef::new_with_poison(handle.clone(), token.clone(), poison.clone()),
+            system: self.clone(),
+        };
+
+        let system = self.clone();
+        let loop_token = token.clone();
+        let loop_poison = poison.clone();
+        let max = opts.max_restarts;
+
+        tokio::spawn(async move {
+            loop {
+                let incarnation = AssertUnwindSafe(run_incarnation(
+                    &mut rx,
+                    &loop_token,
+                    &loop_poison,
+                    &init,
+                    &update,
+                    &ctx,
+                    &stats,
+                ));
+                match incarnation.catch_unwind().await {
+                    Ok(()) => break, // clean exit
+                    Err(panic) => {
+                        let n = restarts.fetch_add(1, Ordering::Relaxed) + 1;
+                        if n > max {
+                            let ancestry = system.ancestry(id);
+                            system.emit(SupervisionEvent::Failed {
+                                id,
+                                ancestry,
+                                error: panic_message(panic),
+                            });
+                            break; // exhausted → die, no auto-restart
+                        }
+                        system.emit(SupervisionEvent::Restarted { id, restarts: n });
+                        // loop: re-run incarnation, SAME rx (mailbox preserved).
+                    }
+                }
+            }
+            // Cleanup: cancel (cascade children), deregister (no zombie), notify.
+            loop_token.cancel();
+            system.deregister(id);
+            system.emit(SupervisionEvent::Stopped { id });
+        });
+
+        crate::ActorRef::new_with_poison(handle, token, poison)
+    }
+}
+
+#[cfg(feature = "system")]
+/// One actor incarnation: fold messages into state until a clean exit.
+async fn run_incarnation<M, S, I, U, Fut>(
+    rx: &mut mpsc::Receiver<M>,
+    token: &CancellationToken,
+    poison: &CancellationToken,
+    init: &I,
+    update: &U,
+    ctx: &crate::context::Context<M>,
+    stats: &Arc<ActorStats>,
+) where
+    M: Send + 'static,
+    S: Send + 'static,
+    I: Fn() -> S,
+    U: Fn(S, M, crate::context::Context<M>) -> Fut,
+    Fut: Future<Output = S>,
+{
+    let mut state = init();
+    let mut draining = false;
+    loop {
+        tokio::select! {
+            biased;
+            _ = token.cancelled() => break,
+            _ = poison.cancelled(), if !draining => {
+                rx.close();
+                draining = true;
+            }
+            msg = rx.recv() => match msg {
+                Some(m) => {
+                    stats.record_start();
+                    state = update(state, m, ctx.clone()).await;
+                    stats.record_finish();
+                }
+                None => break,
+            }
+        }
+    }
+}
+
+fn panic_message(panic: Box<dyn std::any::Any + Send>) -> Arc<str> {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        Arc::from(*s)
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        Arc::from(s.as_str())
+    } else {
+        Arc::from("panic")
     }
 }
 
