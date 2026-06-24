@@ -214,7 +214,6 @@ async fn child_cascades_on_parent_shutdown() {
             if let Some(tx) = alive_tx.lock().unwrap().take() {
                 let _ = tx.send(child);
             }
-            ()
         },
         |s, _m: (), _ctx| async move { s },
     );
@@ -303,12 +302,10 @@ async fn one_for_one_isolation() {
     let a = sys.spawn(
         "sibling-a",
         |_c| 0u64,
-        |s, m: AMsg, _c| async move {
+        |_s, m: AMsg, _c| async move {
             match m {
                 AMsg::Boom => panic!("a down"),
             }
-            #[allow(unreachable_code)]
-            s
         },
     );
     a.tell(AMsg::Boom).unwrap();

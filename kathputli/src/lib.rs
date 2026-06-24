@@ -69,6 +69,7 @@
 //! ```
 //!
 //! See `ActorSystem`, `Context`, `StatusRef` for the full API.
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod actor;
 pub mod actor_ref;
@@ -79,12 +80,16 @@ pub mod registry;
 pub mod stats;
 
 #[cfg(feature = "system")]
+#[cfg_attr(docsrs, doc(cfg(feature = "system")))]
 pub mod context;
 #[cfg(feature = "system")]
+#[cfg_attr(docsrs, doc(cfg(feature = "system")))]
 pub mod id;
 #[cfg(feature = "system")]
+#[cfg_attr(docsrs, doc(cfg(feature = "system")))]
 pub mod status;
 #[cfg(feature = "system")]
+#[cfg_attr(docsrs, doc(cfg(feature = "system")))]
 pub mod supervisor;
 
 pub use actor::Actor;
@@ -96,10 +101,14 @@ pub use registry::ActorRegistry;
 pub use stats::ActorStatsSnapshot;
 
 #[cfg(feature = "system")]
+#[cfg_attr(docsrs, doc(cfg(feature = "system")))]
 pub use context::Context;
 #[cfg(feature = "system")]
+#[cfg_attr(docsrs, doc(cfg(feature = "system")))]
 pub use id::ActorId;
 #[cfg(feature = "system")]
+#[cfg_attr(docsrs, doc(cfg(feature = "system")))]
 pub use status::{ActorNode, ActorStatus, StatusMsg, StatusRef};
 #[cfg(feature = "system")]
+#[cfg_attr(docsrs, doc(cfg(feature = "system")))]
 pub use supervisor::{ActorSystem, SpawnOptions, SupervisionEvent};
