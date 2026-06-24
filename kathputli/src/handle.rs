@@ -91,6 +91,7 @@ pub fn spawn<A: Actor>(mut actor: A, buffer: usize) -> ActorRef<A::Msg> {
                     Some(m) => {
                         stats_loop.record_start();
                         handle_one(&mut actor, m).await;
+                        stats_loop.record_finish();
                     }
                     None => break,
                 },
