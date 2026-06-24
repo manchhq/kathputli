@@ -227,3 +227,91 @@ async fn status_snapshot_serializes() {
     let json = serde_json::to_string(&tree).expect("serialize tree");
     assert!(json.contains("\"name\":\"root\""));
 }
+
+#[tokio::test]
+async fn no_zombie_after_stop() {
+    let sys = ActorSystem::start();
+    let a = sys.spawn("temp", |_c| 0u8, |s, _m: (), _c| async move { s });
+    let id = {
+        // Find the worker id via the tree.
+        let tree = sys.status().tree().await;
+        fn find(nodes: &[kathputli::ActorNode], name: &str) -> Option<kathputli::ActorId> {
+            for n in nodes {
+                if n.status.name == name {
+                    return Some(n.status.id);
+                }
+                if let Some(id) = find(&n.children, name) {
+                    return Some(id);
+                }
+            }
+            None
+        }
+        find(&tree, "temp").expect("worker present")
+    };
+    a.shutdown();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    assert!(sys.status().actor(id).await.is_none(), "entry must be reaped");
+}
+
+#[tokio::test]
+async fn one_for_one_isolation() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let sys = ActorSystem::start();
+    let sib_inits = Arc::new(AtomicU32::new(0));
+
+    // Sibling B: counts its init calls (should stay at 1 — never restarts).
+    let b_inits = sib_inits.clone();
+    let _b = sys.spawn(
+        "sibling-b",
+        move |_c| {
+            b_inits.fetch_add(1, Ordering::SeqCst);
+            0u64
+        },
+        |s, _m: (), _c| async move { s },
+    );
+
+    // Sibling A: panics on demand.
+    enum AMsg { Boom }
+    let a = sys.spawn(
+        "sibling-a",
+        |_c| 0u64,
+        |s, m: AMsg, _c| async move {
+            match m { AMsg::Boom => panic!("a down") }
+            #[allow(unreachable_code)] s
+        },
+    );
+    a.tell(AMsg::Boom).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+
+    assert_eq!(sib_inits.load(Ordering::SeqCst), 1, "sibling B never restarted");
+}
+
+#[tokio::test]
+async fn mailbox_preserved_across_restart() {
+    let sys = ActorSystem::start();
+
+    enum M { Boom, Inc, Get(tokio::sync::oneshot::Sender<u64>) }
+    let a = sys.spawn(
+        "preserve",
+        |_c| 0u64,
+        |count, m, _c| async move {
+            match m {
+                M::Boom => panic!("kaboom"),
+                M::Inc => count + 1,
+                M::Get(reply) => { let _ = reply.send(count); count }
+            }
+        },
+    );
+    // Queue Boom then several Incs back-to-back. Boom is handled (panic →
+    // restart); the buffered Incs must survive and be handled by the new
+    // incarnation.
+    a.tell(M::Boom).unwrap();
+    for _ in 0..4 {
+        a.tell(M::Inc).unwrap();
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    let got = a.ask(M::Get).await.unwrap();
+    assert_eq!(got, 4, "buffered Incs survived the restart");
+}
