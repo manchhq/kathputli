@@ -4,13 +4,17 @@
 
 A minimal, typed-mailbox actor primitive for Rust, built on Tokio.
 
+[![crates.io](https://img.shields.io/crates/v/kathputli.svg)](https://crates.io/crates/kathputli)
+[![docs.rs](https://img.shields.io/docsrs/kathputli)](https://docs.rs/kathputli)
+[![CI](https://github.com/manchhq/kathputli/actions/workflows/ci.yml/badge.svg)](https://github.com/manchhq/kathputli/actions/workflows/ci.yml)
+
 ---
 
 ## Quick start
 
 ```toml
 [dependencies]
-kathputli = "0.1"
+kathputli = "0.2"
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 ```
@@ -66,7 +70,7 @@ async fn main() {
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `tracing` | Emit a `trace`-level span around every `handle()` call. Zero overhead without this feature. | off |
-| `system` | Opt-in supervised actor system: lifecycle tree, restart policies, status queries. Pulls in `futures-util` and `tokio-util`. | off |
+| `system` | Opt-in supervised actor system: lifecycle tree, restart policies, status queries. Pulls in `futures-util`. | off |
 | `serde` | Derives `serde::Serialize` on `ActorStatus` and `ActorNode` (requires `system`). | off |
 
 ## Actor System (opt-in)
@@ -75,7 +79,7 @@ Enable the `system` feature in `Cargo.toml`:
 
 ```toml
 [dependencies]
-kathputli = { version = "0.1", features = ["system"] }
+kathputli = { version = "0.2", features = ["system"] }
 # add "serde" to the features list for JSON-serializable status snapshots
 ```
 
@@ -156,7 +160,7 @@ async fn main() {
 
 ### `Context<M>` API
 
-Inside `update` (and `init`), the [`Context<M>`] gives access to:
+Inside `update` (and `init`), the `Context<M>` gives access to:
 
 | Method | Returns |
 |--------|---------|
@@ -180,7 +184,7 @@ Modularity ships as Cargo features (the same approach sqlx uses for postgres/sql
 
 ### Planned `persist` feature
 
-A future `persist` feature will enable event-sourced actors that integrate with the [`katha`](../katha) event-sourcing crate as an optional dependency. This is planned to be extracted from real usage in the PiHealth apps once the per-entity-actor pattern stabilizes — it is not speculative API design.
+A future `persist` feature will enable event-sourced actors that integrate with the `katha` event-sourcing crate as an optional dependency. This is planned to be extracted from real usage in the PiHealth apps once the per-entity-actor pattern stabilizes — it is not speculative API design.
 
 ### Distributed/clustering is an explicit NON-GOAL
 
@@ -198,8 +202,3 @@ There is no remoting, no location transparency, no sharding, and there never wil
 - **Planned future work:** per-parent failure-handler callbacks, restart backoff / time-windows, optional `actor!` macro, trait → system adapter, state persistence.
 
 **Akka users:** this is deliberately `ActorRef` + mailbox only — no Behaviors, no DeathWatch, no Cluster. If you need those, use a different crate.
-
-## Related crates in this workspace
-
-- [`katha`](../katha) — event sourcing core (कथा, "story/narrative")
-- [`katha-macros`](../katha-macros) — proc-macro helpers for katha
