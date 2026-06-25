@@ -20,6 +20,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@just
+      - uses: taiki-e/install-action@cargo-binstall
+      - name: Install cargo-crap
+        run: cargo binstall -y --force cargo-crap   # --force: rust-cache leaves stale install metadata
       - name: Format
         run: cargo fmt --check
       - name: Clippy
@@ -32,5 +36,5 @@ jobs:
         run: cargo test --doc --all-features
       # --all-features so feature-gated code (e.g. the `system` status actor)
       # is compiled and measured — otherwise it reads as 0% and inflates CRAP.
-      - name: Coverage (all features)
-        run: cargo llvm-cov --all-features
+      - name: CRAP score (fail above 30)
+        run: just crap --format github
