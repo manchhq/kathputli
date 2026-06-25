@@ -1,6 +1,6 @@
 [package]
 name = "kathputli"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Minimal typed-mailbox actor framework over Tokio — actors respond to messages like puppets to strings"
 license = "MIT OR Apache-2.0"
