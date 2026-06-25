@@ -19,6 +19,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Format
         run: cargo fmt --check
       - name: Clippy
@@ -29,3 +30,7 @@ jobs:
         run: cargo nextest run --all-features
       - name: Doctests
         run: cargo test --doc --all-features
+      # --all-features so feature-gated code (e.g. the `system` status actor)
+      # is compiled and measured — otherwise it reads as 0% and inflates CRAP.
+      - name: Coverage (all features)
+        run: cargo llvm-cov --all-features

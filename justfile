@@ -17,8 +17,14 @@ test:
 doc:
     cargo doc --all-features --no-deps --open
 
+# test coverage with --all-features (gated code stays measured); needs cargo-llvm-cov
+coverage:
+    # --all-features is required: without it, feature-gated code (e.g. the
+    # `system` status actor) reads as 0% covered and inflates CRAP scores.
+    cargo llvm-cov --all-features
+
 # everything CI runs
-ci: check test
+ci: check test coverage
 
 # cut a release: bump version, commit, tag vX.Y.Z, push — CI publishes to crates.io
 # usage: just release patch|minor|major  (dry-run first with `just release-dry patch`)
