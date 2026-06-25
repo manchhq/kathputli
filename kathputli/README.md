@@ -101,6 +101,91 @@ Reach for the **trait style** when you want a lightweight, dependency-free
 primitive; reach for the **FP style** when you want supervision and restart
 policies. See [Actor System](#actor-system-opt-in) below for the full FP API.
 
+### Stateful actor
+
+The counter above already holds state. Here is a slightly richer example — a
+key-value store with `Set` (fire-and-forget) and `Get` (request-response) — in
+both styles so you can see how each one threads state through.
+
+**Trait style** — state lives in the struct, mutated through `&mut self`:
+
+```rust
+use std::collections::HashMap;
+use async_trait::async_trait;
+use kathputli::{Actor, spawn};
+use tokio::sync::oneshot;
+
+enum StoreMsg {
+    Set(String, String),
+    Get(String, oneshot::Sender<Option<String>>),
+}
+
+struct Store {
+    data: HashMap<String, String>,
+}
+
+#[async_trait]
+impl Actor for Store {
+    type Msg = StoreMsg;
+
+    async fn handle(&mut self, msg: StoreMsg) {
+        match msg {
+            StoreMsg::Set(k, v) => { self.data.insert(k, v); }
+            StoreMsg::Get(k, reply) => { let _ = reply.send(self.data.get(&k).cloned()); }
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let actor_ref = spawn(Store { data: HashMap::new() }, 32);
+    let handle = actor_ref.handle().clone();
+
+    handle.tell(StoreMsg::Set("lang".into(), "rust".into())).unwrap();
+    let val = handle.ask(|reply| StoreMsg::Get("lang".into(), reply)).await.unwrap();
+    assert_eq!(val.as_deref(), Some("rust"));
+
+    actor_ref.shutdown();
+}
+```
+
+**FP style** — state is the value `update` returns; mutate it and hand it back
+(needs `features = ["system"]`):
+
+```rust,ignore
+use std::collections::HashMap;
+use kathputli::ActorSystem;
+use tokio::sync::oneshot;
+
+enum StoreMsg {
+    Set(String, String),
+    Get(String, oneshot::Sender<Option<String>>),
+}
+
+#[tokio::main]
+async fn main() {
+    let sys = ActorSystem::start();
+
+    let store = sys.spawn(
+        "store",
+        |_ctx| HashMap::<String, String>::new(),   // init: empty map
+        |mut data, msg: StoreMsg, _ctx| async move {
+            match msg {
+                StoreMsg::Set(k, v) => { data.insert(k, v); }
+                StoreMsg::Get(k, reply) => { let _ = reply.send(data.get(&k).cloned()); }
+            }
+            data                                     // return the next state
+        },
+    );
+
+    store.tell(StoreMsg::Set("lang".into(), "rust".into())).unwrap();
+    let val = store.ask(|reply| StoreMsg::Get("lang".into(), reply)).await.unwrap();
+    assert_eq!(val.as_deref(), Some("rust"));
+
+    sys.shutdown();
+}
+```
+
 ## Feature flags
 
 | Feature | Description | Default |
