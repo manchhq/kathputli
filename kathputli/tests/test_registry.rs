@@ -292,6 +292,11 @@ async fn snapshot_reflects_post_eviction_state() {
     let evicted = registry.evict_idle(Duration::from_millis(40)).await;
     assert_eq!(evicted, vec!["drop".to_string()]);
 
-    let snap_ids: Vec<String> = registry.snapshot().await.into_iter().map(|(id, _)| id).collect();
+    let snap_ids: Vec<String> = registry
+        .snapshot()
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
     assert_eq!(snap_ids, vec!["keep".to_string()]);
 }
