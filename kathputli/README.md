@@ -65,6 +65,42 @@ async fn main() {
 }
 ```
 
+### Two styles
+
+kathputli ships **two valid ways** to define an actor — pick by what you need:
+
+| Style | API | Feature | Supervision |
+|-------|-----|---------|-------------|
+| **Trait** (above) | implement `Actor` with `async fn handle` | always on | none — a panic in `handle()` silently kills the actor |
+| **FP** | pass `init` + `update` closures to `ActorSystem::spawn` | `system` | restart ×3, mailbox preserved across restarts, status tree |
+
+The same counter in the **FP style** (needs `features = ["system"]`):
+
+```rust,ignore
+use kathputli::ActorSystem;
+
+#[tokio::main]
+async fn main() {
+    let sys = ActorSystem::start();
+
+    let counter = sys.spawn(
+        "counter",
+        |_ctx| 0u64,                           // init: produce initial state
+        |state, _msg: (), _ctx| async move {   // update: state + msg -> next state
+            state + 1
+        },
+    );
+
+    counter.tell(()).unwrap();                 // fire-and-forget
+
+    sys.shutdown();                            // graceful system-wide stop
+}
+```
+
+Reach for the **trait style** when you want a lightweight, dependency-free
+primitive; reach for the **FP style** when you want supervision and restart
+policies. See [Actor System](#actor-system-opt-in) below for the full FP API.
+
 ## Feature flags
 
 | Feature | Description | Default |
