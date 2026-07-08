@@ -6,3 +6,6 @@ target/llvm-cov*/
 
 # Superpowers planning docs (not checked in)
 docs/superpowers/
+
+# Superpowers (local skills/harness dir, not checked in)
+.superpowers/
