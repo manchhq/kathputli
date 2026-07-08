@@ -9,3 +9,6 @@ docs/superpowers/
 
 # Superpowers (local skills/harness dir, not checked in)
 .superpowers/
+
+# Serena (local AI navigation config, not checked in)
+.serena/
